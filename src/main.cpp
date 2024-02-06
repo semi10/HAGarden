@@ -36,16 +36,16 @@
 /*-----------------------------------------------------------------------------------------------------------------------------------------------*/
 /*------------------------------------I/O Definitions--------------------------------------------------------------------------------------------*/
 /*-----------------------------------------------------------------------------------------------------------------------------------------------*/
-const int IN_DETECT = 6; 
 const int DHTPIN = 7;
+const int MOIST1PIN = A5;
 
 /*-----------------------------------------------------------------------------------------------------------------------------------------------*/
 /*------------------------------------ Configuration --------------------------------------------------------------------------------------------*/
 /*-----------------------------------------------------------------------------------------------------------------------------------------------*/
 const char*         g_ssid = "O&S_Ex";
 const char*         g_password = "0525362505";
-const char*         g_mqtt_server = "192.168.0.141";                           // MQTT Server IP, same of Home Assistant
-const char*         g_mqttUser = "hass";                                 // MQTT Server User Name
+const char*         g_mqtt_server = "192.168.0.141";                          // MQTT Server IP, same of Home Assistant
+const char*         g_mqttUser = "hass";                                      // MQTT Server User Name
 const char*         g_mqttPsw = "m8800gts";                                   // MQTT Server password
 int                 g_mqttPort = 1883;                                        // MQTT Server Port
 
@@ -64,9 +64,6 @@ WiFiClient          g_WiFiClient;
 PubSubClient        g_mqttPubSub(g_WiFiClient);
 unsigned long       g_Time = 0;
 int                 g_count = 0;
-int                 g_input_Door; 
-int                 g_old_input_Door = 0;
-String              g_strDoorStatus;
 int                 g_mqttCounterConn = 0;
 float               g_Humidity = 0.0;
 float               g_Temperature = 0.0;
@@ -74,6 +71,7 @@ bool                g_InitSystem = true;
 String              g_UniqueId;
 bool                g_SendMqttData = false;
 DHT                 g_dht(DHTPIN, DHTTYPE);
+int                 g_moist1 = 0;
 
 
 void MqttReceiverCallback(char* topic, byte* inFrame, unsigned int length);       
@@ -88,8 +86,6 @@ void setup()
     //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Input output Pin definitions
     //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    pinMode(IN_DETECT, INPUT);
-
     g_dht.begin();
 
     Serial.begin(115200);
@@ -145,26 +141,8 @@ void loop()
     if(millis() - g_Time > PERIOD_MILLSEC_500)  // Every 500 [msec]
     {
         g_Time = millis();
-
-        ////////////////////////////////////////////////////////////////
-        // DIGITAL INPUTS
-        ////////////////////////////////////////////////////////////////
-        g_input_Door = digitalRead(IN_DETECT); 
         
-        if(g_input_Door == 0) 
-            g_strDoorStatus = "ON";
-        else
-            g_strDoorStatus = "OFF";
-
-        if(g_old_input_Door != g_input_Door)
-        {
-            g_old_input_Door = g_input_Door;
-            g_SendMqttData = true;
-            Serial.print("Door Status: ");
-            Serial.println(g_strDoorStatus);
-        }
-        
-        if(g_count++ == 20 || g_SendMqttData) // Every 10 [sec] or if input status changed
+        if(g_count++ == 20) // Every 10 [sec] or if input status changed
         {
             g_count = 0;
             ////////////////////////////////////////////////////////////////
@@ -172,6 +150,9 @@ void loop()
             ////////////////////////////////////////////////////////////////
             g_Temperature = g_dht.readTemperature();
             g_Humidity = g_dht.readHumidity();
+            g_moist1 = analogRead(A5);
+            g_moist1 = constrain(g_moist1, 3000, 4095);
+            g_moist1 = map(g_moist1, 3000, 4095, 100, 0);
 
             Serial.print("Temperature: ");
             Serial.print(g_Temperature);
@@ -179,6 +160,10 @@ void loop()
 
             Serial.print("Humidity: ");
             Serial.print(g_Humidity);
+            Serial.println(" %");
+
+            Serial.print("Moisture: ");
+            Serial.print(g_moist1);
             Serial.println(" %");
             
             g_SendMqttData = true;
@@ -192,7 +177,7 @@ void loop()
             JsonDocument payload;  
             payload["temp"] = g_Temperature;
             payload["hum"] = g_Humidity;
-            payload["inputstatus"] = g_strDoorStatus;
+            payload["moist1"] = g_moist1;
 
             String strPayload;
             serializeJson(payload, strPayload);
@@ -327,13 +312,11 @@ void MqttHomeAssistantDiscovery()
         payload["dev_cla"] = "humidity";
         payload["val_tpl"] = "{{ value_json.hum | is_defined }}";
         payload["unit_of_meas"] = "%";
-        // device = payload.createNestedObject("device");
         device = payload["device"].to<JsonObject>();
         device["name"] = g_deviceName;
         device["model"] = g_deviceModel;
         device["sw_version"] = g_swVersion;
         device["manufacturer"] = g_manufacturer;
-        // identifiers = device.createNestedArray("identifiers");
         identifiers = device["identifiers"].to<JsonArray>();
         identifiers.add(g_UniqueId);
 
@@ -344,27 +327,26 @@ void MqttHomeAssistantDiscovery()
         g_mqttPubSub.publish(discoveryTopic.c_str(), strPayload.c_str());
 
         ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Binary Door
+        // Moisture
         ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         strPayload.clear();
         identifiers.clear();
         device.clear();
         payload.clear();
 
-        discoveryTopic = "homeassistant/binary_sensor/esp32iotsensor/" + g_deviceName + "_door" + "/config";
+        discoveryTopic = "homeassistant/sensor/esp32iotsensor/" + g_deviceName + "_moist1" + "/config";
         
-        payload["name"] = g_deviceName + ".door";
-        payload["uniq_id"] = g_UniqueId + "_door";
+        payload["name"] = g_deviceName + ".moist1";
+        payload["uniq_id"] = g_UniqueId + "_moist1";
         payload["stat_t"] = g_mqttStatusTopic;
-        payload["dev_cla"] = "door";
-        payload["val_tpl"] = "{{ value_json.inputstatus | is_defined }}";
-        // device = payload.createNestedObject("device");
+        payload["dev_cla"] = "moisture";
+        payload["val_tpl"] = "{{ value_json.moist1 | is_defined }}";
+        payload["unit_of_meas"] = "%";
         device = payload["device"].to<JsonObject>();
         device["name"] = g_deviceName;
         device["model"] = g_deviceModel;
         device["sw_version"] = g_swVersion;
         device["manufacturer"] = g_manufacturer;
-        // identifiers = device.createNestedArray("identifiers");
         identifiers = device["identifiers"].to<JsonArray>();
         identifiers.add(g_UniqueId);
 
@@ -373,7 +355,6 @@ void MqttHomeAssistantDiscovery()
         serializeJson(payload, strPayload);
 
         g_mqttPubSub.publish(discoveryTopic.c_str(), strPayload.c_str());
-
     }
 }
 
