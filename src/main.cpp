@@ -32,17 +32,18 @@
 #define PERIOD_MILLSEC_250     250
 
 #define DHTTYPE             AM2301
+#define NUMB_OF_MOISTURE_SENS    5
 
 /*-----------------------------------------------------------------------------------------------------------------------------------------------*/
 /*------------------------------------I/O Definitions--------------------------------------------------------------------------------------------*/
 /*-----------------------------------------------------------------------------------------------------------------------------------------------*/
 const int DHTPIN = 7;
-const int MOIST1PIN = A5;
+const int MOIST_PIN[] = {A0, A1, A2, A3, A4, A5};
 
 /*-----------------------------------------------------------------------------------------------------------------------------------------------*/
 /*------------------------------------ Configuration --------------------------------------------------------------------------------------------*/
 /*-----------------------------------------------------------------------------------------------------------------------------------------------*/
-const char*         g_ssid = "O&S_Ex";
+const char*         g_ssid = "O&S";
 const char*         g_password = "0525362505";
 const char*         g_mqtt_server = "192.168.0.141";                          // MQTT Server IP, same of Home Assistant
 const char*         g_mqttUser = "hass";                                      // MQTT Server User Name
@@ -71,7 +72,7 @@ bool                g_InitSystem = true;
 String              g_UniqueId;
 bool                g_SendMqttData = false;
 DHT                 g_dht(DHTPIN, DHTTYPE);
-int                 g_moist1 = 0;
+int                 g_moist[6] = {0};
 
 
 void MqttReceiverCallback(char* topic, byte* inFrame, unsigned int length);       
@@ -150,9 +151,19 @@ void loop()
             ////////////////////////////////////////////////////////////////
             g_Temperature = g_dht.readTemperature();
             g_Humidity = g_dht.readHumidity();
-            g_moist1 = analogRead(A5);
-            g_moist1 = constrain(g_moist1, 3000, 4095);
-            g_moist1 = map(g_moist1, 3000, 4095, 100, 0);
+            
+            for (int i = 0; i < NUMB_OF_MOISTURE_SENS; i++)
+            {
+                g_moist[i] = analogRead(MOIST_PIN[i]);
+                g_moist[i] = constrain(g_moist[i], 2500, 4095);
+                g_moist[i] = map(g_moist[i], 2500, 4095, 100, 0);
+
+                Serial.print("Moisture sensor ");
+                Serial.print(i);
+                Serial.print(": ");
+                Serial.print(g_moist[i]);
+                Serial.println(" %");
+            }
 
             Serial.print("Temperature: ");
             Serial.print(g_Temperature);
@@ -162,9 +173,6 @@ void loop()
             Serial.print(g_Humidity);
             Serial.println(" %");
 
-            Serial.print("Moisture: ");
-            Serial.print(g_moist1);
-            Serial.println(" %");
             
             g_SendMqttData = true;
         }
@@ -174,10 +182,21 @@ void loop()
         //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////  
         if(g_SendMqttData == true)        
         {
-            JsonDocument payload;  
+            JsonDocument payload;
+            String valTemplate;
             payload["temp"] = g_Temperature;
             payload["hum"] = g_Humidity;
-            payload["moist1"] = g_moist1;
+            payload["moist0"] =  g_moist[0];
+            payload["moist1"] =  g_moist[1];
+            payload["moist2"] =  g_moist[2];
+            payload["moist3"] =  g_moist[3];
+            payload["moist4"] =  g_moist[4];
+
+            // for (int i = 0; i < NUMB_OF_MOISTURE_SENS; i++)
+            // {
+            //     valTemplate = "moist" + i;
+            //     payload[valTemplate] = g_moist[i];
+            // }
 
             String strPayload;
             serializeJson(payload, strPayload);
@@ -262,6 +281,7 @@ void MqttHomeAssistantDiscovery()
     String discoveryTopic;
     String payload;
     String strPayload;
+    String valTemplate;
     if(g_mqttPubSub.connected())
     {
         Serial.println("SEND HOME ASSISTANT DISCOVERY!!!");
@@ -280,13 +300,11 @@ void MqttHomeAssistantDiscovery()
         payload["dev_cla"] = "temperature";
         payload["val_tpl"] = "{{ value_json.temp | is_defined }}";
         payload["unit_of_meas"] = "°C";
-        //device = payload.createNestedObject("device");
         device = payload["device"].to<JsonObject>();
         device["name"] = g_deviceName;
         device["model"] = g_deviceModel;
         device["sw_version"] = g_swVersion;
         device["manufacturer"] = g_manufacturer;
-        //identifiers = device.createNestedArray("identifiers");
         identifiers = device["identifiers"].to<JsonArray>();
         identifiers.add(g_UniqueId);
 
@@ -329,32 +347,37 @@ void MqttHomeAssistantDiscovery()
         ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // Moisture
         ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        strPayload.clear();
-        identifiers.clear();
-        device.clear();
-        payload.clear();
+        for(int i = 0; i < NUMB_OF_MOISTURE_SENS; i++)
+        {
+            strPayload.clear();
+            identifiers.clear();
+            device.clear();
+            payload.clear();
 
-        discoveryTopic = "homeassistant/sensor/esp32iotsensor/" + g_deviceName + "_moist1" + "/config";
-        
-        payload["name"] = g_deviceName + ".moist1";
-        payload["uniq_id"] = g_UniqueId + "_moist1";
-        payload["stat_t"] = g_mqttStatusTopic;
-        payload["dev_cla"] = "moisture";
-        payload["val_tpl"] = "{{ value_json.moist1 | is_defined }}";
-        payload["unit_of_meas"] = "%";
-        device = payload["device"].to<JsonObject>();
-        device["name"] = g_deviceName;
-        device["model"] = g_deviceModel;
-        device["sw_version"] = g_swVersion;
-        device["manufacturer"] = g_manufacturer;
-        identifiers = device["identifiers"].to<JsonArray>();
-        identifiers.add(g_UniqueId);
+            discoveryTopic = "homeassistant/sensor/esp32iotsensor/" + g_deviceName + "_moist" + i + "/config";
+            valTemplate = String("{{ value_json.moist") + i + " | is_defined }}";
+            
+            payload["name"] = g_deviceName + ".moist" + i;
+            payload["uniq_id"] = g_UniqueId + "_moist" + i;
+            payload["stat_t"] = g_mqttStatusTopic;
+            payload["dev_cla"] = "moisture";
+            payload["val_tpl"] = valTemplate;
+            payload["unit_of_meas"] = "%";
+            device = payload["device"].to<JsonObject>();
+            device["name"] = g_deviceName;
+            device["model"] = g_deviceModel;
+            device["sw_version"] = g_swVersion;
+            device["manufacturer"] = g_manufacturer;
+            identifiers = device["identifiers"].to<JsonArray>();
+            identifiers.add(g_UniqueId);
 
-        serializeJsonPretty(payload, Serial);
-        Serial.println(" ");
-        serializeJson(payload, strPayload);
+            serializeJsonPretty(payload, Serial);
+            Serial.println(" ");
+            serializeJson(payload, strPayload);
 
-        g_mqttPubSub.publish(discoveryTopic.c_str(), strPayload.c_str());
+            g_mqttPubSub.publish(discoveryTopic.c_str(), strPayload.c_str());
+        }
+
     }
 }
 
